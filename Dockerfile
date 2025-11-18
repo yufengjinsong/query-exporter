@@ -1,4 +1,5 @@
-FROM --platform=$BUILDPLATFORM python:3.13-slim-bookworm AS build-image
+# FROM --platform=$BUILDPLATFORM python:3.13-slim-bookworm AS build-image
+FROM --platform=$BUILDPLATFORM hub.i.basemind.com/base/python:3.13-slim-bookworm AS build-image
 
 RUN apt-get update
 RUN apt-get full-upgrade -y

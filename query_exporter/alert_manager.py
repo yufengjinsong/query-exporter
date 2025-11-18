@@ -3,8 +3,7 @@
 import asyncio
 import json
 import time
-import re
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 from datetime import datetime, timedelta
 from collections import defaultdict
 from urllib.parse import urljoin
@@ -42,8 +41,11 @@ class AlertState:
             self.start_time = None
             self.sent = False
         elif active and self.active:
-            # Remaining active
-            pass
+            # Remaining active - check if duration exceeds 30 minutes
+            if self.start_time and (current_time - self.start_time).total_seconds() >= 30 * 60:
+                # Reset for next alert cycle
+                self.start_time = current_time
+                self.sent = False
 
 
 class AlertManager:
@@ -149,7 +151,11 @@ class AlertManager:
 
 
 class AlertGenerator:
-    """Generate alerts from query results with condition evaluation and duration tracking."""
+    """Generate alerts from query results based on result existence and duration tracking.
+    
+    Alerts are triggered when query results contain data (non-empty results).
+    If a query returns empty set, no alert will be sent.
+    """
 
     def __init__(
         self, 
@@ -163,9 +169,6 @@ class AlertGenerator:
         
         # Track alert states: {alert_key: AlertState}
         self.alert_states: Dict[str, AlertState] = {}
-        
-        # Cache for parsed conditions: {condition_string: (operator, threshold)}
-        self._condition_cache: Dict[str, Tuple[str, float]] = {}
 
     def generate_alerts_from_results(
         self, 
@@ -193,7 +196,7 @@ class AlertGenerator:
                 continue
 
             for result in results:
-                # Check if alert condition is met
+                # Check if alert condition is met, if has result value
                 is_active = self._evaluate_alert_condition(alert_config, result)
                 print(f"[AlertGenerator] _evaluate_alert_condition is_active: {is_active}")
                 # Create unique key for this alert instance
@@ -228,39 +231,39 @@ class AlertGenerator:
         return alerts
 
     def _evaluate_alert_condition(self, alert_config: Dict[str, Any], result: Dict[str, Any]) -> bool:
-        """Evaluate if alert condition is met based on result value."""
+        """Evaluate if alert should be triggered based on result existence.
+        
+        Returns True if result has data (not empty), False otherwise.
+        If query returns empty set, no alert will be sent.
+        If query returns data, alert will be sent.
+        """
         try:
             print(f"[AlertGenerator] _evaluate_alert_condition alert_config: {alert_config}")
             print(f"[AlertGenerator] _evaluate_alert_condition result: {result}")
+            
+            # Check if result has 'value' field
             if 'value' not in result:
                 self.logger.debug(
-                    "Result missing 'value' field, skipping condition evaluation",
+                    "Result missing 'value' field, skipping alert evaluation",
                     result_keys=list(result.keys())
                 )
                 return False
-                
+            
             value = result['value']
             
-            # Handle None values
+            # If value is None, don't trigger alert
             if value is None:
-                self.logger.debug("Result value is None, skipping condition evaluation")
+                self.logger.debug("Result value is None, skipping alert evaluation")
                 return False
             
-            # Convert to number for comparison
-            numeric_value = self._convert_to_numeric(value)
-            print(f"[AlertGenerator] _evaluate_alert_condition numeric_value: {numeric_value}")
-            if numeric_value is None:
-                self.logger.debug(
-                    "Cannot convert result value to number, skipping condition evaluation",
-                    value=value,
-                    value_type=type(value).__name__
-                )
-                return False
-            
-            # Parse condition from alert config
-            condition = alert_config.get('condition', '> 0')
-            print(f"[AlertGenerator] _evaluate_alert_condition condition: {condition}")
-            return self._evaluate_condition(numeric_value, condition)
+            # If we have a value (even if it's 0 or empty string), trigger alert
+            # The presence of data means the query returned results
+            self.logger.debug(
+                "Result has value, alert condition met",
+                value=value,
+                value_type=type(value).__name__
+            )
+            return True
             
         except Exception as e:
             self.logger.error(
@@ -271,93 +274,6 @@ class AlertGenerator:
             )
             return False
 
-    def _convert_to_numeric(self, value: Any) -> Optional[float]:
-        """Convert value to numeric type for comparison."""
-        if isinstance(value, (int, float)):
-            return float(value)
-        
-        if isinstance(value, str):
-            try:
-                # Remove any whitespace and try to convert
-                cleaned_value = value.strip()
-                return float(cleaned_value)
-            except (ValueError, TypeError):
-                return None
-        
-        # Try generic conversion
-        try:
-            return float(value)
-        except (ValueError, TypeError):
-            return None
-
-    def _evaluate_condition(self, value: float, condition: str) -> bool:
-        """Evaluate a condition string against a value using cached parsing."""
-        try:
-            # Use cached parsed condition or parse and cache it
-            if condition not in self._condition_cache:
-                parsed_condition = self._parse_condition(condition)
-                if parsed_condition is None:
-                    self.logger.warning(
-                        "Invalid condition format, using default '> 0'",
-                        condition=condition
-                    )
-                    parsed_condition = ('>', 0.0)
-                self._condition_cache[condition] = parsed_condition
-            
-            operator, threshold = self._condition_cache[condition]
-            
-            # Evaluate the condition
-            if operator == '>':
-                return value > threshold
-            elif operator == '>=':
-                return value >= threshold
-            elif operator == '<':
-                return value < threshold
-            elif operator == '<=':
-                return value <= threshold
-            elif operator == '==':
-                return value == threshold
-            elif operator == '!=':
-                return value != threshold
-            else:
-                self.logger.error("Unknown operator in condition", operator=operator)
-                return False
-                
-        except Exception as e:
-            self.logger.error(
-                "Failed to evaluate condition",
-                condition=condition,
-                value=value,
-                error=str(e)
-            )
-            return False
-
-    def _parse_condition(self, condition: str) -> Optional[Tuple[str, float]]:
-        """Parse condition string into operator and threshold."""
-        try:
-            # Normalize the condition string
-            condition = condition.strip()
-            
-            # Use regex to parse the condition
-            pattern = r'^\s*(>|>=|<|<=|==|!=)\s*([+-]?\d*\.?\d+)\s*$'
-            match = re.match(pattern, condition)
-            
-            if not match:
-                self.logger.warning("Invalid condition format", condition=condition)
-                return None
-            
-            operator, value_str = match.groups()
-            threshold = float(value_str)
-            
-            return (operator, threshold)
-            
-        except (ValueError, TypeError) as e:
-            self.logger.error(
-                "Failed to parse condition",
-                condition=condition,
-                error=str(e)
-            )
-            return None
 
     
     def _create_alert_key(self, alert_name: str, result_labels: Dict[str, Any], database_labels: Dict[str, str]) -> str:
@@ -367,7 +283,7 @@ class AlertGenerator:
         
         # Add database labels
         for key, value in sorted(database_labels.items()):
-            label_parts.append(f"{key}:{value}")
+            label_parts.append(f"{key}")
             
         # Add result labels
         for key, value in sorted(result_labels.items()):
@@ -375,7 +291,7 @@ class AlertGenerator:
             if key == 'value' or (isinstance(value, (int, float)) and key not in ['xxxx', 'yyyy']):
                 continue
             if isinstance(value, (str, int, float)):
-                label_parts.append(f"{key}:{value}")
+                label_parts.append(f"{key}")
                 
         return f"{alert_name}:{':'.join(label_parts)}"
     
