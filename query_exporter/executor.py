@@ -162,18 +162,18 @@ class QueryExecutor:
             query = query_execution.query
             call: TimedCall
             if query.interval:
-                print(f"[Executor] query interval: {query_execution}")
+                self._logger.debug(f"[Executor] query interval: {query_execution}")
                 call = PeriodicCall(self._run_query, query_execution)
                 call.start(query.interval, now=True)
             elif query.schedule is not None:
-                print(f"[Executor] query schedule: {query_execution}")
+                self._logger.debug(f"[Executor] query schedule: {query_execution}")
                 call = TimedCall(self._run_query, query_execution)
                 call.start(self._loop_times_iter(query.schedule))
             self._timed_calls[query_execution.name] = call
 
     async def stop(self) -> None:
         """Stop timed query execution."""
-        print(f"[Executor] stop timed query execution")
+        self._logger.debug(f"[Executor] stop timed query execution")
         coros = (call.stop() for call in self._timed_calls.values())
         await asyncio.gather(*coros, return_exceptions=True)
         self._timed_calls.clear()
@@ -209,7 +209,7 @@ class QueryExecutor:
 
     def _run_query(self, query_execution: QueryExecution) -> None:
         """Periodic task to run a query."""
-        print(f"[Executor] _run_query: {query_execution}")
+        self._logger.debug(f"[Executor] _run_query: {query_execution}")
         for dbname in query_execution.query.databases:
             self._loop.create_task(
                 self._execute_query(query_execution, dbname)
@@ -223,9 +223,9 @@ class QueryExecutor:
             return
 
         db = self._databases[dbname]
-        print(f"[Executor] _execute_query db: {db}")
+        self._logger.debug(f"[Executor] _execute_query db: {db}")
         query = query_execution.query
-        print(f"[Executor] _execute_query: {query}")
+        self._logger.debug(f"[Executor] _execute_query: {query}")
         try:
             metric_results = await db.execute(query_execution)
             if metric_results.latency:
@@ -277,7 +277,7 @@ class QueryExecutor:
                     if result.metric == alert.name:
                         alert_results.append(result)
                         break
-            print(f"[Executor] _process_alerts alert_results: {alert_results}")
+            self._logger.debug(f"[Executor] _process_alerts alert_results: {alert_results}")
             if not alert_results:
                 return
                 

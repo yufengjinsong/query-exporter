@@ -101,7 +101,6 @@ def load_config(
     # config = Config(databases, metrics, alerts, queries)
     config = Config(databases, metrics, queries, alerts, configuration.alertmanager)
     _warn_if_unused(config, logger)
-    print(f"config res: {config}")
     return config
 
 
