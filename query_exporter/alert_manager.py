@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import re
 import time
 from typing import Any, Dict, List, Optional
 from datetime import datetime, timedelta
@@ -409,7 +410,9 @@ class AlertGenerator:
             if 'summary' not in annotations:
                 annotations['summary'] = alert_config.get('summary', alert_name)
             if 'description' not in annotations:
-                annotations['description'] = alert_config.get('description', '')
+                description_template = alert_config.get('description', '')
+                # 替换 description 中的占位符 <label_name> 为实际值
+                annotations['description'] = self._format_description(description_template, result, labels)
             
             # 获取指标值
             value = result.get('value')
@@ -446,6 +449,36 @@ class AlertGenerator:
                 traceback=True  # 这会显示完整的堆栈跟踪
             )
             return None
+    
+    def _format_description(self, template: str, result: Dict[str, Any], labels: Dict[str, str]) -> str:
+        """Format description template by replacing placeholders like <label_name> with actual values.
+        
+        Args:
+            template: Description template string with placeholders like <job_name>
+            result: Query result dictionary containing field values
+            labels: Labels dictionary containing label values
+            
+        Returns:
+            Formatted description string with placeholders replaced
+        """
+        # Find all placeholders in format <label_name>
+        pattern = r'<([^>]+)>'
+        placeholders = re.findall(pattern, template)
+        
+        formatted = template
+        for placeholder in placeholders:
+            # Try to get value from result first, then from labels
+            value = None
+            if placeholder in result:
+                value = result[placeholder]
+            elif placeholder in labels:
+                value = labels[placeholder]
+            
+            # Replace placeholder with actual value or keep original if not found
+            if value is not None:
+                formatted = formatted.replace(f'<{placeholder}>', str(value))
+        
+        return formatted
     
     def cleanup_expired_states(self, max_age_seconds: int = 3600) -> None:
         """Clean up expired alert states to prevent memory leaks."""
