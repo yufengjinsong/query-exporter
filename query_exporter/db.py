@@ -561,7 +561,23 @@ class DataBase:
                 parameters=query_execution.parameters,
                 timeout=query.timeout,
             )
-            return query.results(query_results)
+            # 记录SQL返回的原始行数（info级别，方便排查）
+            row_count = len(query_results.rows) if query_results.rows else 0
+            self.logger.info(
+                "[Database] SQL query returned raw results",
+                query=query_execution.name,
+                row_count=row_count,
+                columns=query_results.keys if query_results.keys else []
+            )
+            metric_results = query.results(query_results)
+            # 记录转换后的metric结果数量
+            metric_count = len(metric_results.results) if metric_results.results else 0
+            self.logger.info(
+                "[Database] SQL query results converted to metrics",
+                query=query_execution.name,
+                metric_count=metric_count
+            )
+            return metric_results
         except TimeoutError:
             self.logger.warning("query timeout", query=query_execution.name)
             raise QueryTimeoutExpired()

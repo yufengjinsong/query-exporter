@@ -239,11 +239,28 @@ class QueryExecutor:
             self._update_metrics_from_results(
                 db, query_execution.name, metric_results.results
             )
+            # 记录SQL执行结果（info级别，方便排查）
+            result_count = len(metric_results.results) if metric_results.results else 0
+            self._logger.info(
+                "[Executor] SQL query executed successfully",
+                query=query_execution.name,
+                database=dbname,
+                result_count=result_count,
+                has_alerts=bool(query_execution.query.alerts)
+            )
             # 新增：处理告警
-            if query_execution.query.alerts and metric_results.results:
-                await self._process_alerts(
-                    query_execution, db, metric_results.results
-                )
+            if query_execution.query.alerts:
+                if metric_results.results:
+                    await self._process_alerts(
+                        query_execution, db, metric_results.results
+                    )
+                else:
+                    self._logger.info(
+                        "[Executor] Query returned empty results, no alerts to process",
+                        query=query_execution.name,
+                        database=dbname,
+                        alert_names=[alert.name for alert in query_execution.query.alerts]
+                    )
             self._increment_queries_count(db, query, "success")
         except InvalidMetricValue:
             self._increment_queries_count(db, query, "invalid-value")
@@ -278,7 +295,23 @@ class QueryExecutor:
                         alert_results.append(result)
                         break
             self._logger.debug(f"[Executor] _process_alerts alert_results: {alert_results}")
+            # 记录告警处理信息（info级别，方便排查）
+            self._logger.info(
+                "[Executor] Processing alerts from query results",
+                query=query_execution.name,
+                total_results=len(results),
+                alert_results_count=len(alert_results),
+                alert_names=[alert.name for alert in query_execution.query.alerts],
+                result_metrics=[r.metric for r in results] if results else []
+            )
             if not alert_results:
+                self._logger.info(
+                    "[Executor] No matching alert results found, skipping alert processing",
+                    query=query_execution.name,
+                    total_results=len(results),
+                    expected_alert_name=query_execution.query.alerts[0].name if query_execution.query.alerts else None,
+                    result_metrics=[r.metric for r in results] if results else []
+                )
                 return
                 
             # 将 MetricResult 转换为字典格式
