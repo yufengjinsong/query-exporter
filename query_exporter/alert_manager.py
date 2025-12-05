@@ -408,11 +408,13 @@ class AlertGenerator:
             # 构建注解
             annotations = alert_config.get('annotations', {}).copy()
             if 'summary' not in annotations:
-                annotations['summary'] = alert_config.get('summary', alert_name)
+                summary_template = alert_config.get('summary', alert_name)
+                # Format summary using Prometheus-style templating
+                annotations['summary'] = self._format_template(summary_template, result, labels)
             if 'description' not in annotations:
                 description_template = alert_config.get('description', '')
-                # 替换 description 中的占位符 <label_name> 为实际值
-                annotations['description'] = self._format_description(description_template, result, labels)
+                # Format description using Prometheus-style templating
+                annotations['description'] = self._format_template(description_template, result, labels)
             
             # 获取指标值
             value = result.get('value')
@@ -422,11 +424,15 @@ class AlertGenerator:
             if alert_state.start_time:
                 duration_seconds = self._get_duration_seconds(alert_state.start_time, datetime.utcnow())
                 annotations['duration'] = f"{duration_seconds:.0f}s"
+            
+            # Add updatedAt timestamp to track when alert was last sent
+            current_time = datetime.utcnow()
+            annotations['updatedAt'] = current_time.isoformat() + 'Z'
 
             alert = {
                 'labels': labels,
                 'annotations': annotations,
-                'startsAt': alert_state.start_time.isoformat() + 'Z' if alert_state.start_time else datetime.utcnow().isoformat() + 'Z',
+                'startsAt': alert_state.start_time.isoformat() + 'Z' if alert_state.start_time else current_time.isoformat() + 'Z',
                 'generatorURL': f'http://query-exporter/alerts?query={query_name}'
             }
 
@@ -450,33 +456,67 @@ class AlertGenerator:
             )
             return None
     
-    def _format_description(self, template: str, result: Dict[str, Any], labels: Dict[str, str]) -> str:
-        """Format description template by replacing placeholders like <label_name> with actual values.
+    def _format_template(self, template: str, result: Dict[str, Any], labels: Dict[str, str]) -> str:
+        """Format template using Prometheus-style Go templating syntax.
+        
+        Supports:
+        - {{ $labels.variable_name }} - access values from labels dict
+        - {{ $result.variable_name }} - access values from result dict
+        - {{ .variable_name }} - shorthand for result (for compatibility)
         
         Args:
-            template: Description template string with placeholders like <job_name>
+            template: Template string with Prometheus-style placeholders like {{ $labels.job_name }}
             result: Query result dictionary containing field values
             labels: Labels dictionary containing label values
             
         Returns:
-            Formatted description string with placeholders replaced
+            Formatted string with template placeholders replaced
         """
-        # Find all placeholders in format <label_name>
-        pattern = r'<([^>]+)>'
-        placeholders = re.findall(pattern, template)
+        if not template:
+            return template
+        
+        # Find all template blocks in format {{ ... }}
+        pattern = r'\{\{\s*([^}]+)\s*\}\}'
+        matches = re.finditer(pattern, template)
         
         formatted = template
-        for placeholder in placeholders:
-            # Try to get value from result first, then from labels
-            value = None
-            if placeholder in result:
-                value = result[placeholder]
-            elif placeholder in labels:
-                value = labels[placeholder]
+        # Process matches in reverse order to maintain correct indices
+        for match in reversed(list(matches)):
+            full_match = match.group(0)  # {{ ... }}
+            expr = match.group(1).strip()  # content inside {{ }}
             
-            # Replace placeholder with actual value or keep original if not found
+            value = None
+            
+            # Parse expression: $labels.variable_name, $result.variable_name, or .variable_name
+            if expr.startswith('$labels.'):
+                # {{ $labels.variable_name }}
+                var_name = expr[8:].strip()  # Remove '$labels.'
+                value = labels.get(var_name)
+            elif expr.startswith('$result.'):
+                # {{ $result.variable_name }}
+                var_name = expr[8:].strip()  # Remove '$result.'
+                value = result.get(var_name)
+            elif expr.startswith('.'):
+                # {{ .variable_name }} - shorthand for result
+                var_name = expr[1:].strip()  # Remove '.'
+                value = result.get(var_name)
+            else:
+                # Try to resolve as simple variable name (check result first, then labels)
+                var_name = expr.strip()
+                value = result.get(var_name) if var_name in result else labels.get(var_name)
+            
+            # Replace template block with actual value or empty string if not found
             if value is not None:
-                formatted = formatted.replace(f'<{placeholder}>', str(value))
+                formatted = formatted[:match.start()] + str(value) + formatted[match.end():]
+            else:
+                # Keep original template if variable not found (or replace with empty string)
+                # Following Prometheus behavior, we'll keep it as-is for debugging
+                self.logger.debug(
+                    "Template variable not found",
+                    expression=expr,
+                    available_labels=list(labels.keys()),
+                    available_result_keys=list(result.keys())
+                )
         
         return formatted
     
