@@ -296,6 +296,7 @@ class Alert(Model):
     description: str = ""
     labels: list[Label] = Field(default_factory=list)
     annotations: dict[Label, str] = Field(default_factory=dict)
+    generatorURL: str | None = None  # Generator URL for this alert, supports {{ query }} placeholder
 
 
 class AlertManager(Model):

@@ -7,7 +7,7 @@ import time
 from typing import Any, Dict, List, Optional
 from datetime import datetime, timedelta
 from collections import defaultdict
-from urllib.parse import urljoin
+from urllib.parse import quote, urljoin
 
 import aiohttp
 import structlog
@@ -429,11 +429,20 @@ class AlertGenerator:
             current_time = datetime.utcnow()
             annotations['updatedAt'] = current_time.isoformat() + 'Z'
 
+            # Get generatorURL from alert config, with fallback to default
+            generator_url = alert_config.get('generatorURL')
+            if generator_url:
+                # Format generatorURL with template variables
+                generator_url = self._format_generator_url(generator_url, labels)
+            else:
+                # Default generatorURL if not configured
+                generator_url = f'https://grafana-infra.stepfun-inc.com'
+
             alert = {
                 'labels': labels,
                 'annotations': annotations,
                 'startsAt': alert_state.start_time.isoformat() + 'Z' if alert_state.start_time else current_time.isoformat() + 'Z',
-                'generatorURL': f'http://query-exporter/alerts?query={query_name}'
+                'generatorURL': generator_url
             }
 
             self.logger.debug(
@@ -516,6 +525,67 @@ class AlertGenerator:
                     expression=expr,
                     available_labels=list(labels.keys()),
                     available_result_keys=list(result.keys())
+                )
+        
+        return formatted
+    
+    def _format_generator_url(
+        self, 
+        template: str, 
+        labels: Dict[str, str]
+    ) -> str:
+        """Format generatorURL template with placeholders.
+        
+        Supports:
+        - {{ $labels.variable_name }} - access values from labels dict
+        - {{ $variable_name }} - shorthand for labels (e.g., {{ $owner }} -> labels['owner'])
+        
+        Args:
+            template: Generator URL template string
+            labels: Labels dictionary containing label values
+            
+        Returns:
+            Formatted URL with all placeholders replaced
+        """
+        if not template:
+            return template
+        
+        # Find all template blocks in format {{ ... }}
+        pattern = r'\{\{\s*([^}]+)\s*\}\}'
+        matches = re.finditer(pattern, template)
+        
+        formatted = template
+        # Process matches in reverse order to maintain correct indices
+        for match in reversed(list(matches)):
+            full_match = match.group(0)  # {{ ... }}
+            expr = match.group(1).strip()  # content inside {{ }}
+            
+            value = None
+            
+            # Parse expression
+            if expr.startswith('$labels.'):
+                # {{ $labels.variable_name }}
+                var_name = expr[8:].strip()  # Remove '$labels.'
+                value = labels.get(var_name)
+            elif expr.startswith('$') and not expr.startswith('$labels.') and not expr.startswith('$result.'):
+                # {{ $variable_name }} - shorthand for labels (e.g., {{ $owner }})
+                var_name = expr[1:].strip()  # Remove '$'
+                value = labels.get(var_name)
+            else:
+                # Try to resolve as simple variable name from labels
+                var_name = expr.strip()
+                value = labels.get(var_name)
+            
+            # Replace template block with actual value or keep original if not found
+            if value is not None:
+                # URL encode the value to handle special characters in query parameters
+                formatted = formatted[:match.start()] + quote(str(value), safe='') + formatted[match.end():]
+            else:
+                # Keep original template if variable not found (for debugging)
+                self.logger.debug(
+                    "GeneratorURL template variable not found",
+                    expression=expr,
+                    available_labels=list(labels.keys())
                 )
         
         return formatted
