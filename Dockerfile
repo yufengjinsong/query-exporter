@@ -72,3 +72,5 @@ EXPOSE 9560/tcp
 VOLUME /config
 WORKDIR /config
 ENTRYPOINT ["query-exporter"]
+
+#sudo docker build --platform=linux/amd64 -f Dockerfile .  -t hub.stepfun-inc.com/monitoring/adonato/query-exporter-reolad:v0.1.0
